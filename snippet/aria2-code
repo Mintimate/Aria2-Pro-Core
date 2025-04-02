@@ -1,11 +1,13 @@
 #
 # Copyright (c) 2020 P3TERX <https://p3terx.com>
+# Modified by Mintimate <https://www.mintimate.cn>
 #
 # This is free software, licensed under the GNU General Public License v3.
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Aria2-Pro-Core
 # File name: snippet/aria2-code
+# Modify: Remove Patch Step.
 #
 
 ARIA2_GIT_CODE() {
@@ -30,11 +32,12 @@ ARIA2_RELEASE_CODE() {
 }
 
 ARIA2_PATCH() {
-    git apply $SCRIPT_DIR/patch/*.patch
+    git apply $SCRIPT_DIR/patch/0001-options-unlock-connection-per-server-limit.patch
+    git apply $SCRIPT_DIR/patch/0002-download-retry-on-slow-speed-and-reset.patch
+    git apply $SCRIPT_DIR/patch/0003-option-add-option-to-retry-on-http-4xx.patch
 }
 
 ARIA2_CODE_GET() {
-    #ARIA2_RELEASE_CODE
-    ARIA2_GIT_CODE
     ARIA2_PATCH
+    ARIA2_GIT_CODE
 }
