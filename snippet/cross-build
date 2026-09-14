@@ -1,12 +1,18 @@
 #
 # Copyright (c) 2020 P3TERX <https://p3terx.com>
+# Modified by Mintimate <https://www.mintimate.cn>
 #
 # This is free software, licensed under the GNU General Public License v3.
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Aria2-Pro-Core
 # File name: snippet/cross-build
+# Modify: Limit the number of threads's Maximum.
 #
+
+MAX_JOBS=8  # 设置最大线程数
+CPU_CORES=$(nproc)  # 获取系统核心数
+JOBS=$(( CPU_CORES > MAX_JOBS ? MAX_JOBS : CPU_CORES ))  # 取较小值
 
 ZLIB_BUILD() {
     mkdir -p $BUILD_DIR/zlib && cd $BUILD_DIR/zlib
@@ -14,7 +20,7 @@ ZLIB_BUILD() {
     ./configure \
         --prefix=$PREFIX \
         --static
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -30,7 +36,7 @@ EXPAT_BUILD() {
         --without-examples \
         --without-tests \
         --without-docbook
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -44,7 +50,7 @@ C_ARES_BUILD() {
         --enable-static \
         --disable-shared \
         --disable-tests
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -55,7 +61,7 @@ OPENSSL_BUILD() {
         --prefix=$PREFIX \
         $OPENSSL_ARCH \
         no-tests
-    make -j$(nproc)
+    make -j${JOBS}
     make install_sw
 }
 
@@ -69,7 +75,7 @@ SQLITE3_BUILD() {
         --enable-static \
         --disable-shared \
         --disable-dynamic-extensions
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -82,7 +88,7 @@ LIBSSH2_BUILD() {
         --enable-static \
         --disable-shared \
         --disable-examples-build
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -97,7 +103,7 @@ JEMALLOC_BUILD() {
         --disable-shared \
         --disable-stats \
         --enable-prof
-    make -j$(nproc)
+    make -j${JOBS}
     make install
 }
 
@@ -118,9 +124,9 @@ ARIA2_BUILD() {
         --without-libgmp \
         --with-libssh2 \
         --with-sqlite3 \
-        --without-jemalloc \
+        --with-jemalloc \
         --with-ca-bundle='/etc/ssl/certs/ca-certificates.crt' \
         ARIA2_STATIC=yes \
         --disable-shared
-    make -j$(nproc)
+    make -j${JOBS}
 }
