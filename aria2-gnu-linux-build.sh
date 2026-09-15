@@ -18,14 +18,20 @@ $SUDO echo
 SCRIPT_DIR=$(dirname $(readlink -f $0))
 
 ## CONFIG ##
-ARCH="$(uname -m)"
-OPENSSL_ARCH="linux-elf"
+ARCH="${ARCH_OVERRIDE:-$(uname -m)}"
+OPENSSL_ARCH="${OPENSSL_ARCH_OVERRIDE:-linux-elf}"
 BUILD_DIR="/tmp"
 ARIA2_CODE_DIR="$BUILD_DIR/aria2"
-OUTPUT_DIR="$HOME/output"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/output}"
 PREFIX="$BUILD_DIR/aria2-build-libs"
 ARIA2_PREFIX="/usr/local"
-export CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
+if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    export CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
+elif command -v brew >/dev/null 2>&1 && [ -f "$(brew --prefix)/etc/ca-certificates/cert.pem" ]; then
+    export CURL_CA_BUNDLE="$(brew --prefix)/etc/ca-certificates/cert.pem"
+else
+    unset CURL_CA_BUNDLE
+fi
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export LD_LIBRARY_PATH="$PREFIX/lib"
 export CC="gcc"
@@ -34,6 +40,12 @@ export STRIP="strip"
 export RANLIB="ranlib"
 export AR="ar"
 export LD="ld"
+
+if [ "$(uname -s)" = Darwin ]; then
+    PACKAGE_OS=macos
+    CA_BUNDLE=/etc/ssl/cert.pem
+    export CC=clang CXX=clang++
+fi
 
 ## DEPENDENCES ##
 source $SCRIPT_DIR/dependences
@@ -48,6 +60,8 @@ TOOLCHAIN() {
         FEDORA_INSTALL
     elif [ -x "$(command -v pacman)" ]; then
         ARCH_INSTALL
+    elif [ -x "$(command -v brew)" ]; then
+        MACOS_INSTALL
     else
         echo -e "This operating system is not supported !"
         exit 1
@@ -74,7 +88,7 @@ C_ARES_BUILD
 OPENSSL_BUILD
 SQLITE3_BUILD
 LIBSSH2_BUILD
-#JEMALLOC_BUILD
+JEMALLOC_BUILD
 ARIA2_BUILD
 #ARIA2_BIN
 ARIA2_PACKAGE

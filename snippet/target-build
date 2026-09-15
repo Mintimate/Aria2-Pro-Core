@@ -7,16 +7,30 @@
 #
 # https://github.com/P3TERX/Aria2-Pro-Core
 # File name: snippet/target-build
-# Modify: Limit the number of threads's Maximum.
+# Modify: Use all logical CPUs by default; MAX_JOBS can limit parallelism.
 #
 
-MAX_JOBS=8  # 设置最大线程数
-CPU_CORES=$(nproc)  # 获取系统核心数
-JOBS=$(( CPU_CORES > MAX_JOBS ? MAX_JOBS : CPU_CORES ))  # 取较小值
+CPU_CORES=$(command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.logicalcpu)
+JOBS=${MAX_JOBS:-$CPU_CORES}
+if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    JOBS=$CPU_CORES
+fi
+
+# Download archives reliably in CI.  With `set -o pipefail`, curl failures
+# must be reported before tar attempts to unpack an error page.
+DOWNLOAD() {
+    local url="$1" output="$2"
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+        --connect-timeout 20 --max-time 300 -o "$output" "$url"
+}
+if (( JOBS > CPU_CORES )); then
+    JOBS=$CPU_CORES
+fi
 
 ZLIB_BUILD() {
     mkdir -p $BUILD_DIR/zlib && cd $BUILD_DIR/zlib
-    curl -Ls -o - "$ZLIB" | tar zxvf - --strip-components=1
+    DOWNLOAD "$ZLIB" /tmp/zlib.tar.gz
+    tar zxf /tmp/zlib.tar.gz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --static
@@ -26,7 +40,8 @@ ZLIB_BUILD() {
 
 EXPAT_BUILD() {
     mkdir -p $BUILD_DIR/expat && cd $BUILD_DIR/expat
-    curl -Ls -o - "$EXPAT" | tar jxvf - --strip-components=1
+    DOWNLOAD "$EXPAT" /tmp/expat.tar.xz
+    tar Jxf /tmp/expat.tar.xz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --enable-static \
@@ -40,7 +55,8 @@ EXPAT_BUILD() {
 
 C_ARES_BUILD() {
     mkdir -p $BUILD_DIR/c-ares && cd $BUILD_DIR/c-ares
-    curl -Ls -o - "$C_ARES" | tar zxvf - --strip-components=1
+    DOWNLOAD "$C_ARES" /tmp/c-ares.tar.gz
+    tar zxf /tmp/c-ares.tar.gz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --enable-static \
@@ -52,18 +68,24 @@ C_ARES_BUILD() {
 
 OPENSSL_BUILD() {
     mkdir -p $BUILD_DIR/openssl && cd $BUILD_DIR/openssl
-    curl -Ls -o - "$OPENSSL" | tar zxvf - --strip-components=1
+    DOWNLOAD "$OPENSSL" /tmp/openssl.tar.gz
+    tar zxf /tmp/openssl.tar.gz --strip-components=1
+    local extra_options=()
+    if [ "$(uname -s)" = Darwin ]; then
+        extra_options+=(no-shared)
+    fi
     ./Configure \
         --prefix=$PREFIX \
         $OPENSSL_ARCH \
-        no-tests
+        no-tests "${extra_options[@]}"
     make -j${JOBS}
     make install_sw
 }
 
 SQLITE3_BUILD() {
     mkdir -p $BUILD_DIR/sqlite3 && cd $BUILD_DIR/sqlite3
-    curl -Ls -o - "$SQLITE3" | tar zxvf - --strip-components=1
+    DOWNLOAD "$SQLITE3" /tmp/sqlite3.tar.gz
+    tar zxf /tmp/sqlite3.tar.gz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --enable-static \
@@ -75,7 +97,8 @@ SQLITE3_BUILD() {
 
 LIBSSH2_BUILD() {
     mkdir -p $BUILD_DIR/libssh2 && cd $BUILD_DIR/libssh2
-    curl -Ls -o - "$LIBSSH2" | tar zxvf - --strip-components=1
+    DOWNLOAD "$LIBSSH2" /tmp/libssh2.tar.gz
+    tar zxf /tmp/libssh2.tar.gz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --enable-static \
@@ -86,8 +109,12 @@ LIBSSH2_BUILD() {
 }
 
 JEMALLOC_BUILD() {
+    if [ "$(uname -s)" = Darwin ]; then
+        return
+    fi
     mkdir -p $BUILD_DIR/jemalloc && cd $BUILD_DIR/jemalloc
-    curl -Ls -o - "$JEMALLOC" | tar jxvf - --strip-components=1
+    DOWNLOAD "$JEMALLOC" /tmp/jemalloc.tar.bz2
+    tar jxf /tmp/jemalloc.tar.bz2 --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --enable-static \
@@ -100,8 +127,14 @@ JEMALLOC_BUILD() {
 
 ARIA2_BUILD() {
     ARIA2_CODE_GET
+    local jemalloc_option=--with-jemalloc
+    local nls_option=--enable-nls
+    if [ "$(uname -s)" = Darwin ]; then
+        jemalloc_option=--without-jemalloc
+        nls_option=--disable-nls
+    fi
     ./configure \
-        --prefix=${ARIA2_PREFIX:-'/usr/loacl'} \
+        --prefix=${ARIA2_PREFIX:-'/usr/local'} \
         --with-libz \
         --with-libcares \
         --with-libexpat \
@@ -113,8 +146,9 @@ ARIA2_BUILD() {
         --without-libgmp \
         --with-libssh2 \
         --with-sqlite3 \
-        --with-jemalloc \
-        --with-ca-bundle='/etc/ssl/certs/ca-certificates.crt' \
+        "$jemalloc_option" \
+        "$nls_option" \
+        --with-ca-bundle="${CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}" \
         ARIA2_STATIC=yes \
         --disable-shared
     make -j${JOBS}

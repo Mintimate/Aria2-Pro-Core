@@ -7,16 +7,28 @@
 #
 # https://github.com/P3TERX/Aria2-Pro-Core
 # File name: snippet/cross-build
-# Modify: Limit the number of threads's Maximum.
+# Modify: Use all logical CPUs by default; MAX_JOBS can limit parallelism.
 #
 
-MAX_JOBS=8  # 设置最大线程数
-CPU_CORES=$(nproc)  # 获取系统核心数
-JOBS=$(( CPU_CORES > MAX_JOBS ? MAX_JOBS : CPU_CORES ))  # 取较小值
+CPU_CORES=$(command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.logicalcpu)
+JOBS=${MAX_JOBS:-$CPU_CORES}
+if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    JOBS=$CPU_CORES
+fi
+
+DOWNLOAD() {
+    local url="$1" output="$2"
+    curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+        --connect-timeout 20 --max-time 300 -o "$output" "$url"
+}
+if (( JOBS > CPU_CORES )); then
+    JOBS=$CPU_CORES
+fi
 
 ZLIB_BUILD() {
     mkdir -p $BUILD_DIR/zlib && cd $BUILD_DIR/zlib
-    curl -Ls -o - "$ZLIB" | tar zxvf - --strip-components=1
+    DOWNLOAD "$ZLIB" /tmp/zlib.tar.gz
+    tar zxf /tmp/zlib.tar.gz --strip-components=1
     ./configure \
         --prefix=$PREFIX \
         --static
@@ -26,7 +38,8 @@ ZLIB_BUILD() {
 
 EXPAT_BUILD() {
     mkdir -p $BUILD_DIR/expat && cd $BUILD_DIR/expat
-    curl -Ls -o - "$EXPAT" | tar jxvf - --strip-components=1
+    DOWNLOAD "$EXPAT" /tmp/expat.tar.xz
+    tar Jxf /tmp/expat.tar.xz --strip-components=1
     ./configure \
         --host=$HOST \
         --build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
@@ -42,7 +55,8 @@ EXPAT_BUILD() {
 
 C_ARES_BUILD() {
     mkdir -p $BUILD_DIR/c-ares && cd $BUILD_DIR/c-ares
-    curl -Ls -o - "$C_ARES" | tar zxvf - --strip-components=1
+    DOWNLOAD "$C_ARES" /tmp/c-ares.tar.gz
+    tar zxf /tmp/c-ares.tar.gz --strip-components=1
     ./configure \
         --host=$HOST \
         --build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
@@ -56,7 +70,8 @@ C_ARES_BUILD() {
 
 OPENSSL_BUILD() {
     mkdir -p $BUILD_DIR/openssl && cd $BUILD_DIR/openssl
-    curl -Ls -o - "$OPENSSL" | tar zxvf - --strip-components=1
+    DOWNLOAD "$OPENSSL" /tmp/openssl.tar.gz
+    tar zxf /tmp/openssl.tar.gz --strip-components=1
     ./Configure \
         --prefix=$PREFIX \
         $OPENSSL_ARCH \
@@ -67,7 +82,8 @@ OPENSSL_BUILD() {
 
 SQLITE3_BUILD() {
     mkdir -p $BUILD_DIR/sqlite3 && cd $BUILD_DIR/sqlite3
-    curl -Ls -o - "$SQLITE3" | tar zxvf - --strip-components=1
+    DOWNLOAD "$SQLITE3" /tmp/sqlite3.tar.gz
+    tar zxf /tmp/sqlite3.tar.gz --strip-components=1
     ./configure \
         --host=$HOST \
         --build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
@@ -81,7 +97,8 @@ SQLITE3_BUILD() {
 
 LIBSSH2_BUILD() {
     mkdir -p $BUILD_DIR/libssh2 && cd $BUILD_DIR/libssh2
-    curl -Ls -o - "$LIBSSH2" | tar zxvf - --strip-components=1
+    DOWNLOAD "$LIBSSH2" /tmp/libssh2.tar.gz
+    tar zxf /tmp/libssh2.tar.gz --strip-components=1
     ./configure \
         --host=$HOST \
         --prefix=$PREFIX \
@@ -94,7 +111,8 @@ LIBSSH2_BUILD() {
 
 JEMALLOC_BUILD() {
     mkdir -p $BUILD_DIR/jemalloc && cd $BUILD_DIR/jemalloc
-    curl -Ls -o - "$JEMALLOC" | tar jxvf - --strip-components=1
+    DOWNLOAD "$JEMALLOC" /tmp/jemalloc.tar.bz2
+    tar jxf /tmp/jemalloc.tar.bz2 --strip-components=1
     ./configure \
         --host=$HOST \
         --build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
@@ -112,7 +130,7 @@ ARIA2_BUILD() {
     ./configure \
         --host=$HOST \
         --build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
-        --prefix=${ARIA2_PREFIX:-'/usr/loacl'} \
+        --prefix=${ARIA2_PREFIX:-'/usr/local'} \
         --with-libz \
         --with-libcares \
         --with-libexpat \

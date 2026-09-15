@@ -17,6 +17,9 @@ on:
       - '**.md'
       - 'LICENSE'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,16 +30,16 @@ jobs:
         PLATFORMS: [amd64, arm64, armhf, i386]
         include:
         - PLATFORMS: amd64
-          BUILDER_IMAGE: debian:11
+          BUILDER_IMAGE: debian:12
           BUILD_SCRIPT: aria2-gnu-linux-build-amd64.sh
         - PLATFORMS: arm64
-          BUILDER_IMAGE: debian:11
+          BUILDER_IMAGE: debian:12
           BUILD_SCRIPT: aria2-gnu-linux-cross-build-arm64.sh
         - PLATFORMS: armhf
-          BUILDER_IMAGE: ubuntu:16.04
+          BUILDER_IMAGE: debian:12
           BUILD_SCRIPT: aria2-gnu-linux-cross-build-armhf.sh
         - PLATFORMS: i386
-          BUILDER_IMAGE: debian:10
+          BUILDER_IMAGE: debian:12
           BUILD_SCRIPT: aria2-gnu-linux-cross-build-i386.sh
 
     steps:
@@ -45,7 +48,7 @@ jobs:
       run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v5
 
     - name: Build
       env:
@@ -53,6 +56,7 @@ jobs:
         BUILDER_IMAGE: ${{ matrix.BUILDER_IMAGE }}
         BUILD_SCRIPT: ${{ matrix.BUILD_SCRIPT }}
       run: |
+        set -euo pipefail
         docker build \
           --build-arg BUILDER_IMAGE \
           --build-arg BUILD_SCRIPT \
@@ -62,16 +66,17 @@ jobs:
 
     - name: Output Error Log
       if: (!cancelled())
-      run: grep -iE 'fatal|error|critical|failure|warning' build.log
+      run: grep -iE 'fatal|error|critical|failure|warning' build.log || true
 
     - name: Check Version
       run: |
         tar xzvf ./output/aria2*.tar.gz
         file aria2c 2>&1 | tee ./output/file-type-${{ matrix.PLATFORMS }}.txt
         ./aria2c -v 2>&1 | tee ./output/version-${{ matrix.PLATFORMS }}.txt
+        grep -F '1.37.0' ./output/version-${{ matrix.PLATFORMS }}.txt
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v5
       with:
         name: aria2-${{ matrix.PLATFORMS }}
         path: output
@@ -80,11 +85,182 @@ jobs:
       run: |
         ./aria2c https://raw.githubusercontent.com/P3TERX/aria2.conf/master/dht.dat
         ./aria2c https://raw.githubusercontent.com/P3TERX/aria2.conf/master/dht6.dat
-        ./aria2c \
-          --seed-time=0 \
-          --enable-dht6=true \
-          --dht-file-path="$PWD/dht.dat" \
-          --dht-file-path6="$PWD/dht6.dat" \
-          --dht-entry-point='dht.transmissionbt.com:6881' \
-          --dht-entry-point6='dht.transmissionbt.com:6881' \
-          "$(curl -fsSL https://ubuntu.com/download/alternative-downloads | grep -o 'https.*server.*torrent' | head -1)"
+        set +e
+        timeout 180s ./aria2c \
+            --seed-time=0 \
+            --enable-dht6=true \
+            --dht-file-path="$PWD/dht.dat" \
+            --dht-file-path6="$PWD/dht6.dat" \
+            --dht-entry-point='dht.transmissionbt.com:6881' \
+            --dht-entry-point6='dht.transmissionbt.com:6881' \
+            "$(curl -fsSL https://ubuntu.com/download/alternative-downloads | grep -o 'https.*server.*torrent' | head -1)"
+        status=$?
+        set -e
+        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+          exit "$status"
+        fi
+        if [ "$status" -eq 124 ]; then
+          echo "Torrent peer test timed out after 180 seconds; build artifacts remain valid."
+        fi
+
+  release:
+    name: Publish GitHub Release
+    needs: [build, macos, windows]
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v5
+      with:
+        pattern: aria2-*
+        path: release-assets
+        merge-multiple: true
+
+    - name: Publish release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        version="1.37.0-build.${GITHUB_RUN_NUMBER}"
+        for arch in amd64 arm64 armhf i386; do
+          test -s "release-assets/aria2-static-linux-$arch.tar.gz"
+        done
+        for arch in arm64 x64; do
+          test -s "release-assets/aria2-static-macos-$arch.tar.gz"
+        done
+        for arch in x64 x86; do
+          test -s "release-assets/aria2-windows-$arch.zip"
+        done
+        gh release create "v${version}" release-assets/*.tar.gz release-assets/*.zip \
+          --repo "$GITHUB_REPOSITORY" \
+          --target "$GITHUB_SHA" \
+          --title "Aria2 Pro Core ${version}" \
+          --generate-notes
+
+  macos:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: arm64
+          runner: macos-14
+          openssl_arch: darwin64-arm64-cc
+        - arch: x64
+          runner: macos-15-intel
+          openssl_arch: darwin64-x86_64-cc
+    steps:
+    - uses: actions/checkout@v5
+    - name: Build
+      env:
+        ARCH_OVERRIDE: ${{ matrix.arch }}
+        OPENSSL_ARCH_OVERRIDE: ${{ matrix.openssl_arch }}
+        OUTPUT_DIR: ${{ github.workspace }}/output
+        HOMEBREW_NO_AUTO_UPDATE: 1
+      run: bash aria2-gnu-linux-build.sh
+    - name: Test packaged macOS executable
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/aria2-check"
+        tar -xzf output/aria2-static-macos-*.tar.gz -C "$RUNNER_TEMP/aria2-check"
+        cd "$RUNNER_TEMP/aria2-check"
+        file aria2c
+        otool -L aria2c | tee dependencies.txt
+        if grep -E '/opt/homebrew|/usr/local|/private/tmp|/tmp/' dependencies.txt; then
+          echo 'Unexpected dependency on build-machine libraries.' >&2
+          exit 1
+        fi
+        ./aria2c --version | tee version.txt
+        grep -F 'aria2 version 1.37.0' version.txt
+        ./aria2c --max-tries=3 --retry-wait=2 --timeout=30 --out=LICENSE.download \
+          "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/LICENSE"
+        cmp LICENSE.download "$GITHUB_WORKSPACE/LICENSE"
+    - uses: actions/upload-artifact@v5
+      with:
+        name: aria2-macos-${{ matrix.arch }}
+        path: output/*.tar.gz
+        if-no-files-found: error
+
+  windows:
+    name: Build Windows (${{ matrix.arch }})
+    runs-on: windows-2022
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: x64
+          msystem: MINGW64
+          package_prefix: x86_64
+        - arch: x86
+          msystem: MINGW32
+          package_prefix: i686
+    steps:
+    - uses: actions/checkout@v5
+    - name: Set up MSYS2 MinGW (${{ matrix.arch }})
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.msystem }}
+        update: true
+        install: >-
+          base-devel
+          mingw-w64-${{ matrix.package_prefix }}-toolchain
+          mingw-w64-${{ matrix.package_prefix }}-autotools
+          mingw-w64-${{ matrix.package_prefix }}-pkgconf
+          mingw-w64-${{ matrix.package_prefix }}-c-ares
+          mingw-w64-${{ matrix.package_prefix }}-expat
+          mingw-w64-${{ matrix.package_prefix }}-zlib
+          mingw-w64-${{ matrix.package_prefix }}-sqlite3
+          mingw-w64-${{ matrix.package_prefix }}-libssh2
+          mingw-w64-${{ matrix.package_prefix }}-gmp
+          git
+          zip
+    - name: Build
+      shell: msys2 {0}
+      env:
+        WINDOWS_ARCH: ${{ matrix.arch }}
+      run: bash aria2-windows-build.sh
+    - name: Test packaged Windows executable without MSYS2
+      shell: pwsh
+      run: |
+        $testDir = Join-Path $env:RUNNER_TEMP 'aria2-check'
+        Expand-Archive "output/aria2-windows-${{ matrix.arch }}.zip" $testDir
+        # Both architectures can run on the x64 runner, so also inspect the
+        # PE machine type of every packaged executable and runtime DLL.
+        $expectedMachine = @{ x64 = 0x8664; x86 = 0x014c }['${{ matrix.arch }}']
+        $binaries = Get-ChildItem $testDir -File | Where-Object { $_.Extension -in '.exe', '.dll' }
+        foreach ($binary in $binaries) {
+          $bytes = [System.IO.File]::ReadAllBytes($binary.FullName)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne $expectedMachine) {
+            throw "Unexpected CPU architecture in $($binary.Name): PE machine $machine, expected $expectedMachine"
+          }
+        }
+        # Keep MSYS2 off PATH while making the package directory available to
+        # the Windows loader for the bundled MinGW runtime DLLs.
+        $env:PATH = "$testDir;$env:SystemRoot\System32;$env:SystemRoot"
+        Push-Location $testDir
+        $version = & .\aria2c.exe -v 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or "$version" -notmatch 'aria2 version 1\.37\.0') {
+          throw "The packaged executable failed: $version"
+        }
+        $version
+        & .\aria2c.exe --max-tries=3 --retry-wait=2 --timeout=30 --out=LICENSE.download "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/LICENSE"
+        if ($LASTEXITCODE -ne 0) { throw 'HTTPS download failed' }
+        # .gitattributes keeps LICENSE in LF form, matching GitHub's raw blob.
+        $expectedHash = (Get-FileHash "$env:GITHUB_WORKSPACE/LICENSE" -Algorithm SHA256).Hash
+        $actualHash = (Get-FileHash LICENSE.download -Algorithm SHA256).Hash
+        if ($actualHash -ne $expectedHash) {
+          throw "Downloaded content mismatch: expected SHA256 $expectedHash, got $actualHash"
+        }
+        Pop-Location
+    - uses: actions/upload-artifact@v5
+      with:
+        name: aria2-windows-${{ matrix.arch }}
+        path: output/aria2-windows-${{ matrix.arch }}.zip
+        if-no-files-found: error

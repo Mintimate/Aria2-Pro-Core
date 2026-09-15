@@ -1,0 +1,3 @@
+# HTTPS smoke tests compare this checkout file with GitHub's raw blob by hash.
+# Keep identical bytes on Windows even when core.autocrlf=true.
+/LICENSE text eol=lf
